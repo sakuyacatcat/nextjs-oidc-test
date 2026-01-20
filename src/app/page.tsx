@@ -1,5 +1,5 @@
 import { auth } from "@/auth";
-import { AuthButton } from "@/components/auth-button";
+import { AuthButton } from "@/components/authButton";
 import Link from "next/link";
 
 export default async function Home() {
