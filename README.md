@@ -96,3 +96,50 @@ make clean       # node_modules, .next 削除
 ## 技術詳細
 
 [development.md](./development.md) を参照。
+
+## 将来展望: 他の IdP への対応
+
+このサンプルは Keycloak を IdP として使用しているが、OIDC 準拠の IdP であれば設定変更のみで切り替え可能。
+
+### 対応可能な IdP 例
+
+| IdP | Auth.js プロバイダー |
+|-----|---------------------|
+| Microsoft Entra ID (Azure AD) | `microsoft-entra-id` |
+| Google | `google` |
+| Okta | `okta` |
+| Auth0 | `auth0` |
+
+### Entra ID への切り替え例
+
+1. **環境変数の変更** (`.env.local`)
+
+```bash
+AUTH_MICROSOFT_ENTRA_ID_ID=<Application (client) ID>
+AUTH_MICROSOFT_ENTRA_ID_SECRET=<Client Secret>
+AUTH_MICROSOFT_ENTRA_ID_ISSUER=https://login.microsoftonline.com/<Tenant ID>/v2.0
+```
+
+2. **Auth.js 設定の変更** (`src/auth.ts`)
+
+```typescript
+import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
+
+export const { handlers, signIn, signOut, auth } = NextAuth({
+  providers: [
+    MicrosoftEntraID({
+      clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
+      clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET,
+      issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER,
+    }),
+  ],
+});
+```
+
+3. **signIn 呼び出しの変更**
+
+```typescript
+await signIn("microsoft-entra-id");
+```
+
+OIDC が標準プロトコルであるため、IdP を変更してもアプリケーション側の変更は最小限で済む。
