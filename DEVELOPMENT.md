@@ -263,6 +263,151 @@ curl http://localhost:8080/realms/test-realm/.well-known/openid-configuration | 
 
 ---
 
+## SP・IdP が必要とする情報
+
+OIDC 認証を成立させるために、SP（RP）と IdP はそれぞれ相手の情報を事前に知っている必要がある。
+
+### SP（RP）が必要とする情報
+
+| 情報                   | 取得方法       | 使用タイミング | 説明                                      |
+| ---------------------- | -------------- | -------------- | ----------------------------------------- |
+| **issuer URL**         | 事前設定       | 全体           | IdP の識別子。OIDC Discovery の起点となる |
+| **client_id**          | 事前設定       | ステップ 3, 8  | IdP に登録した SP の識別子                |
+| **client_secret**      | 事前設定       | ステップ 8     | IdP に登録した SP の秘密鍵                |
+| authorization_endpoint | OIDC Discovery | ステップ 3     | 認可リクエストの送信先 URL                |
+| token_endpoint         | OIDC Discovery | ステップ 8     | トークンリクエストの送信先 URL            |
+| jwks_uri               | OIDC Discovery | ステップ 10    | ID Token 署名検証用の公開鍵取得先         |
+| userinfo_endpoint      | OIDC Discovery | 任意           | ユーザー情報の追加取得先                  |
+| end_session_endpoint   | OIDC Discovery | ログアウト時   | IdP 側のセッション終了用                  |
+
+**ポイント**: SP が事前に設定するのは `issuer`, `client_id`, `client_secret` の 3 つだけ。他のエンドポイント URL は OIDC Discovery で自動取得される。
+
+### IdP が必要とする情報
+
+| 情報                           | 設定方法         | 使用タイミング | 説明                                               |
+| ------------------------------ | ---------------- | -------------- | -------------------------------------------------- |
+| **client_id**                  | クライアント登録 | ステップ 3, 8  | SP の識別子                                        |
+| **client_secret**              | クライアント登録 | ステップ 8     | SP が本物か検証するための秘密鍵                    |
+| **redirect_uri（許可リスト）** | クライアント登録 | ステップ 3, 6  | 認可コードを返すリダイレクト先の許可リスト         |
+| allowed_scopes                 | クライアント登録 | ステップ 3     | SP に許可するスコープ（openid, profile, email 等） |
+
+### 各ステップでの検証と使用する情報
+
+```
+ステップ 3: Authorization Request
+──────────────────────────────────────────────────────
+ブラウザ → IdP
+
+SP が使う情報:
+  - authorization_endpoint（Discovery で取得）
+  - client_id（事前設定）
+
+IdP が検証:
+  ✅ client_id が登録済みか
+  ✅ redirect_uri が許可リストに含まれるか
+  ✅ scope が許可されているか
+
+
+ステップ 6: Authorization Code 発行
+──────────────────────────────────────────────────────
+IdP → ブラウザ → SP
+
+IdP が使う情報:
+  - redirect_uri（許可リストと照合済み）
+
+IdP は事前登録された redirect_uri にのみリダイレクトする
+→ オープンリダイレクト攻撃の防止
+
+
+ステップ 8: Token Request
+──────────────────────────────────────────────────────
+SP → IdP（サーバー間通信）
+
+SP が使う情報:
+  - token_endpoint（Discovery で取得）
+  - client_id（事前設定）
+  - client_secret（事前設定）
+
+IdP が検証:
+  ✅ client_id + client_secret の組み合わせが正しいか
+  ✅ authorization_code が有効か（未使用・期限内）
+  ✅ redirect_uri がステップ 3 と同じか
+
+
+ステップ 10: ID Token 検証
+──────────────────────────────────────────────────────
+SP 内部処理
+
+SP が使う情報:
+  - jwks_uri から取得した公開鍵
+  - issuer（事前設定、iss クレームとの照合）
+  - client_id（aud クレームとの照合）
+
+SP が検証:
+  ✅ 署名が正しいか（公開鍵で検証）
+  ✅ iss が期待する IdP か
+  ✅ aud が自分の client_id か
+  ✅ exp が期限内か
+  ✅ nonce がリクエスト時と一致するか
+```
+
+### OIDC Discovery の仕組み
+
+SP は `{issuer}/.well-known/openid-configuration` にアクセスするだけで、必要なエンドポイント情報を自動取得できる。
+
+```
+SP の設定: issuer URL のみ
+              │
+              ▼
+┌─────────────────────────────────────────────────────────┐
+│  GET {issuer}/.well-known/openid-configuration          │
+└─────────────────────────────────────────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────────────────┐
+│  {                                                      │
+│    "issuer": "https://...",                             │
+│    "authorization_endpoint": "https://.../auth",        │
+│    "token_endpoint": "https://.../token",               │
+│    "jwks_uri": "https://.../certs",                     │
+│    "userinfo_endpoint": "https://.../userinfo",         │
+│    ...                                                  │
+│  }                                                      │
+└─────────────────────────────────────────────────────────┘
+              │
+              ├──> authorization_endpoint → ステップ 3 で使用
+              ├──> token_endpoint         → ステップ 8 で使用
+              ├──> jwks_uri               → ステップ 10 で使用
+              └──> userinfo_endpoint      → 追加情報取得時に使用
+```
+
+### 信頼関係の確立
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        事前の信頼関係構築                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│   IdP 側で SP を登録                 SP 側で IdP を設定             │
+│   ─────────────────                 ─────────────────               │
+│   ・client_id 発行                   ・issuer URL 設定              │
+│   ・client_secret 発行               ・client_id 設定               │
+│   ・redirect_uri 登録                ・client_secret 設定           │
+│                                                                     │
+│         │                                   │                       │
+│         └─────────────┬─────────────────────┘                       │
+│                       ▼                                             │
+│              相互に相手を識別・検証できる状態                        │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+認証フロー中の検証:
+  IdP → SP を検証: client_id + client_secret で「本物の SP か」確認
+  SP → IdP を検証: ID Token の署名を公開鍵で検証し「本物の IdP が発行したか」確認
+```
+
+---
+
 ## セキュリティ考慮事項
 
 ### 1. Client Secret の保護
